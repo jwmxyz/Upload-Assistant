@@ -5,7 +5,7 @@ RUN apk add --no-cache mono --repository http://dl-cdn.alpinelinux.org/alpine/ed
 
 # install requirements
 RUN  apk add --no-cache --upgrade ffmpeg mediainfo python3 git py3-pip python3-dev g++ cargo mktorrent rust
-RUN venv/bin/python -m install wheel
+RUN pip3 -m install wheel --break-system-packages
 
 # create virtual environment
 RUN python3 -m venv /venv
@@ -16,7 +16,7 @@ WORKDIR Uploadrr
 
 # install reqs
 COPY requirements.txt .
-RUN venv/bin/python -m install -r requirements.txt
+RUN pip3 -m install -r requirements.txt --break-system-packages
 
 # copy everything
 COPY . .
