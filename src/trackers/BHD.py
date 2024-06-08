@@ -11,13 +11,7 @@ from src.trackers.COMMON import COMMON
 from src.console import console
 
 class BHD():
-    """
-    Edit for Tracker:
-        Edit BASE.torrent with announce and source
-        Check for duplicates
-        Set type/category IDs
-        Upload
-    """
+
     def __init__(self, config):
         self.config = config
         self.tracker = 'BHD'
@@ -92,11 +86,11 @@ class BHD():
         if len(tags) > 0:
             data['tags'] = ','.join(tags)
         headers = {
-            'User-Agent': f'Upload Assistant/2.1 ({platform.system()} {platform.release()})'
+            'User-Agent': f'Uploadrr ({platform.system()} {platform.release()})'
         }
         
         url = self.upload_url + self.config['TRACKERS'][self.tracker]['api_key'].strip()
-        if meta['debug'] == False:
+        if not meta['debug']:
             response = requests.post(url=url, files=files, data=data, headers=headers)
             try:
                 response = response.json()
@@ -114,10 +108,9 @@ class BHD():
                 console.print("It may have uploaded, go check")
                 return 
         else:
-            console.print(f"[cyan]Request Data:")
+            console.print("[cyan]Request Data:")
             console.print(data)
-        
-        
+              
 
     async def get_cat_id(self, category_name):
         category_id = {
@@ -180,12 +173,8 @@ class BHD():
         return type_id
 
 
-        
-   
-
-
     async def search_existing(self, meta):
-        dupes = []
+        dupes = {}
         console.print("[yellow]Searching for existing torrents on site...")
         category = meta['category']
         if category == 'MOVIE':
@@ -210,9 +199,14 @@ class BHD():
             if response.get('status_code') == 1:
                 for each in response['results']:
                     result = each['name']
+                    try:
+                        size = each.find('size').text
+                    except Exception:
+                        size = 0
                     difference = SequenceMatcher(None, meta['clean_name'].replace('DD+', 'DDP'), result).ratio()
                     if difference >= 0.05:
-                        dupes.append(result)
+                        dupes[result] = size
+            # CvT: Unable to test as I dont have access. Assuming size parameter is given under 'size' in response. Needed for dictionary + size comparison.            
             else:
                 console.print(f"[yellow]{response.get('status_message')}")
                 await asyncio.sleep(5) 
@@ -261,13 +255,13 @@ class BHD():
             tags.append('EnglishDub')
         if "Open Matte" in meta.get('edition', ""):
             tags.append("OpenMatte")
-        if meta.get('scene', False) == True:
+        if meta.get('scene', False) is True:
             tags.append("Scene")
-        if meta.get('personalrelease', False) == True:
+        if meta.get('personalrelease', False) is True:
             tags.append('Personal')
         if "hybrid" in meta.get('edition', "").lower():
             tags.append('Hybrid')
-        if meta.get('has_commentary', False) == True:
+        if meta.get('has_commentary', False) is True:
             tags.append('Commentary')
         if "DV" in meta.get('hdr', ''):
             tags.append('DV')

@@ -11,13 +11,6 @@ from src.trackers.COMMON import COMMON
 from src.console import console
 
 class HUNO():
-    """
-    Edit for Tracker:
-        Edit BASE.torrent with announce and source
-        Check for duplicates
-        Set type/category IDs
-        Upload
-    """
     def __init__(self, config):
         self.config = config
         self.tracker = 'HUNO'
@@ -42,7 +35,7 @@ class HUNO():
 
         # adding logic to check if its an encode or webrip and not HEVC as only HEVC encodes and webrips are allowed
         if meta['video_codec'] != "HEVC" and (meta['type'] == "ENCODE" or meta['type'] == "WEBRIP"):
-            console.print(f'[bold red]Only x265/HEVC encodes are allowed')
+            console.print('[bold red]Only x265/HEVC encodes are allowed')
             return
 
         if meta['bdinfo'] != None:
@@ -87,13 +80,13 @@ class HUNO():
                 data['internal'] = 0
 
         headers = {
-            'User-Agent': f'Upload Assistant/2.1 ({platform.system()} {platform.release()})'
+            'User-Agent': f'Uploadrr ({platform.system()} {platform.release()})'
         }
         params = {
             'api_token': tracker_config['api_key'].strip()
         }
 
-        if meta['debug'] == False:
+        if not meta['debug']:
             response = requests.post(url=self.upload_url, files=files, data=data, headers=headers, params=params)
             try:
                 console.print(response.json())
@@ -104,7 +97,7 @@ class HUNO():
                 console.print("It may have uploaded, go check")
                 return
         else:
-            console.print(f"[cyan]Request Data:")
+            console.print("[cyan]Request Data:")
             console.print(data)
         open_torrent.close()
 
@@ -257,7 +250,7 @@ class HUNO():
 
 
     async def search_existing(self, meta):
-        dupes = []
+        dupes = {}
         console.print("[yellow]Searching for existing torrents on site...")
 
         params = {
@@ -276,10 +269,9 @@ class HUNO():
             response = requests.get(url=self.search_url, params=params)
             response = response.json()
             for each in response['data']:
-                result = [each][0]['attributes']['name']
-                # difference = SequenceMatcher(None, meta['clean_name'], result).ratio()
-                # if difference >= 0.05:
-                dupes.append(result)
+                result = each['attributes']['name']
+                size = each['attributes']['size']
+                dupes[result] = size
         except:
             console.print('[bold red]Unable to search for existing torrents on site. Either the site is down or your API key is incorrect')
             await asyncio.sleep(5)

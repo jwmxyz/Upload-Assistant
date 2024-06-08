@@ -2,6 +2,7 @@
 # import discord
 import asyncio
 import requests
+import json
 import os
 import platform
 
@@ -11,13 +12,7 @@ from src.console import console
 
 
 class LCD():
-    """
-    Edit for Tracker:
-        Edit BASE.torrent with announce and source
-        Check for duplicates
-        Set type/category IDs
-        Upload
-    """
+
     def __init__(self, config):
         self.config = config
         self.tracker = 'LCD'
@@ -77,7 +72,7 @@ class LCD():
             'sticky' : 0,
         }
         # Internal
-        if self.config['TRACKERS'][self.tracker].get('internal', False) == True:
+        if self.config['TRACKERS'][self.tracker].get('internal', False):
             if meta['tag'] != "" and (meta['tag'][1:] in self.config['TRACKERS'][self.tracker].get('internal_groups', [])):
                 data['internal'] = 1
 
@@ -89,26 +84,45 @@ class LCD():
             data['season_number'] = meta.get('season_int', '0')
             data['episode_number'] = meta.get('episode_int', '0')
         headers = {
-            'User-Agent': f'Upload Assistant/2.1 ({platform.system()} {platform.release()})'
+            'User-Agent': f'Uploadrr ({platform.system()} {platform.release()})'
         }
         params = {
             'api_token': self.config['TRACKERS'][self.tracker]['api_key'].strip()
         }
         
-        if meta['debug'] == False:
-            response = requests.post(url=self.upload_url, files=files, data=data, headers=headers, params=params)
+        if not meta['debug']:
+            success = 'Unknown'
             try:
-                console.print(response.json())
-            except:
-                console.print("It may have uploaded, go check")
-                return 
-        else:
-            console.print(f"[cyan]Request Data:")
-            console.print(data)
-        open_torrent.close()
+                response = requests.post(url=self.upload_url, files=files, data=data, headers=headers, params=params)
+                response.raise_for_status()                
+                response_json = response.json()
+                success = response_json.get('success', False)
+                data = response_json.get('data', {})
+            except Exception as e:
+                console.print(f"[red]Encountered Error: {e}[/red]\n[bold yellow]May have uploaded, please go check..")
+            if success == 'Unknown':
+                console.print("[bold yellow]Status of upload is unknown, please go check..")
+                success = False
+            elif success:
+                console.print("[bold green]Torrent uploaded successfully!")
+            else:
+                console.print("[bold red]Torrent upload failed.")
 
+            if data:
+                if 'name' in data and 'The name has already been taken.' in data['name']:
+                    console.print("[red]Name has already been taken.")
+                if 'info_hash' in data and 'The info hash has already been taken.' in data['info_hash']:
+                    console.print("[red]Info hash has already been taken.")                
+            else:
+                console.print("[cyan]Request Data:")
+                console.print(data)
+    
+            try:
+                open_torrent.close()
+            except Exception as e:
+                console.print(f"[red]Failed to close torrent file: {e}[/red]")
 
-
+            return success 
 
 
     async def get_cat_id(self, category_name, edition, meta):
@@ -117,7 +131,7 @@ class LCD():
             'TV': '2',
             'ANIMES': '6'
             }.get(category_name, '0')
-        if meta['anime'] == True and category_id == '2':
+        if meta['anime'] and category_id == '2':
             category_id = '6'
         return category_id
 
@@ -150,10 +164,8 @@ class LCD():
         return resolution_id
 
             
-
-
     async def search_existing(self, meta):
-        dupes = []
+        dupes = {}
         console.print("[yellow]Buscando por duplicatas no tracker...")
         params = {
             'api_token' : self.config['TRACKERS'][self.tracker]['api_key'].strip(),
@@ -171,10 +183,9 @@ class LCD():
             response = requests.get(url=self.search_url, params=params)
             response = response.json()
             for each in response['data']:
-                result = [each][0]['attributes']['name']
-                # difference = SequenceMatcher(None, meta['clean_name'], result).ratio()
-                # if difference >= 0.05:
-                dupes.append(result)
+                result = each['attributes']['name']
+                size = each['attributes']['size']
+                dupes[result] = size
         except:
             console.print('[bold red]Não foi possivel buscar no tracker torrents duplicados. O tracker está offline ou sua api está incorreta')
             await asyncio.sleep(5)

@@ -8,20 +8,13 @@ from src.console import console
 
 
 class SN():
-    """
-    Edit for Tracker:
-        Edit BASE.torrent with announce and source
-        Check for duplicates
-        Set type/category IDs
-        Upload
-    """
 
     def __init__(self, config):
         self.config = config
         self.tracker = 'SN'
         self.source_flag = 'Swarmazon'
         self.upload_url = 'https://swarmazon.club/api/upload.php'
-        self.search_url = 'https://swarmazon.club/api/search.php'     
+        self.search_url = 'https://swarmazon.club/api/search.php'           
         self.banned_groups = [""]
         pass
 
@@ -89,27 +82,56 @@ class SN():
 
         }
 
-        if meta['debug'] == False:
-            response = requests.request("POST", url=self.upload_url, data=data, files=files)
-
+        if not meta['debug']:
+            success = 'Unknown'
             try:
-                if response.json().get('success'):
-                    console.print(response.json())
-                else:
-                    console.print("[red]Did not upload successfully")
-                    console.print(response.json())
-            except:
-                console.print("[red]Error! It may have uploaded, go check")
+                response = requests.post(url=self.upload_url, files=files, data=data)
+                response.raise_for_status()                
+                response_json = response.json()
+                success = response_json.get('success', False)
+                data = response_json.get('data', {})
+            except Exception as e:
+                console.print(f"[red]Encountered Error: {e}[/red]\n[bold yellow]May have uploaded, please go check..")
+            if success == 'Unknown':
+                console.print("[bold yellow]Status of upload is unknown, please go check..")
+                success = False
+            elif success:
+                console.print("[bold green]Torrent uploaded successfully!")
+            else:
+                console.print("[bold red]Torrent upload failed.")
+
+            if data:
+                if 'name' in data and 'The name has already been taken.' in data['name']:
+                    console.print("[red]Name has already been taken.")
+                if 'info_hash' in data and 'The info hash has already been taken.' in data['info_hash']:
+                    console.print("[red]Info hash has already been taken.")                
+            else:
+                console.print("[cyan]Request Data:")
                 console.print(data)
-                console.print_exception()
-                return
-        else:
-            console.print(f"[cyan]Request Data:")
-            console.print(data)
+            return success
+
+
+
 
 
     async def edit_desc(self, meta):
         base = open(f"{meta['base_dir']}/tmp/{meta['uuid']}/DESCRIPTION.txt", 'r').read()
+        use_global_sigs = self.config["DEFAULT"].get("use_global_sigs", False)
+        if use_global_sigs:
+            signature = self.config["DEFAULT"].get("global_sig")
+            anon_signature = self.config["DEFAULT"].get("global_anon_sig")
+            pr_signature = self.config["DEFAULT"].get("global_pr_sig")
+            anon_pr_sig = self.config["DEFAULT"].get("global_anon_pr_sig")
+            if signature is None or anon_signature is None or pr_signature is None or anon_pr_sig is None:
+                print("[bold][red]WARN[/red]: Global signatures are enabled but not provided in config.[/bold]")                
+        else:
+            signature = self.config["TRACKERS"][self.tracker].get("signature")
+            anon_signature = self.config["TRACKERS"][self.tracker].get("anon_signature")
+            pr_signature = self.config["TRACKERS"][self.tracker].get("pr_signature")
+            anon_pr_sig = self.config["TRACKERS"][self.tracker].get("anon_pr_signature")
+            if signature is None or anon_signature is None or pr_signature is None or anon_pr_sig is None:
+                print("[bold][red]WARN[/red]: Global Signatures are turned off, but no signature is provided for selected tracker.[/bold]")
+
         with open(f"{meta['base_dir']}/tmp/{meta['uuid']}/[{self.tracker}]DESCRIPTION.txt", 'w') as desc:
             desc.write(base)
             images = meta['image_list']
@@ -120,13 +142,23 @@ class SN():
                     img_url = images[each]['img_url']
                     desc.write(f"[url={web_url}][img=720]{img_url}[/img][/url]")
                 desc.write("[/center]")
-            desc.write(f"\n[center][url={self.forum_link}]Simplicity, Socializing and Sharing![/url][/center]")
+
+            if meta["personalrelease"]:
+                if meta["anon"] != 0 or self.config["TRACKERS"][self.tracker].get("anon", False):
+                    desc.write("\n" + anon_pr_sig)
+                elif meta["anon"] == 0:
+                    desc.write("\n" + pr_signature)
+            else:
+                if meta["anon"] != 0 or self.config["TRACKERS"][self.tracker].get("anon", False):
+                    desc.write("\n" + anon_signature)
+                elif meta["anon"] == 0:
+                    desc.write("\n" + signature)
             desc.close()
         return
 
 
     async def search_existing(self, meta):
-        dupes = []
+        dupes = {}
         console.print("[yellow]Searching for existing torrents on site...")
 
         params = {
@@ -153,7 +185,11 @@ class SN():
             response = response.json()
             for i in response['data']:
                 result = i['name']
-                dupes.append(result)
+                try:
+                    size = i['size']
+                except Exception:
+                    size = 0    
+                dupes[result] = size
         except:
             console.print('[red]Unable to search for existing torrents on site. Either the site is down or your API key is incorrect')
             await asyncio.sleep(5)

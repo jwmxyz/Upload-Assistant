@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*- 
+from sys import meta_path
 from src.args import Args
 from src.console import console
 from src.exceptions import *
@@ -43,8 +44,10 @@ try:
     import subprocess
     import itertools
     import cli_ui
+    from rich.prompt import Prompt
     from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn
     import platform
+    from requests.exceptions import HTTPError
 
 except ModuleNotFoundError:
     console.print(traceback.print_exc())
@@ -295,8 +298,6 @@ class Prep():
                     s.terminate()
 
 
-
-
         meta['tmdb'] = meta.get('tmdb_manual', None)
         if meta.get('type', None) == None:
             meta['type'] = self.get_type(video, meta['scene'], meta['is_disc'])
@@ -314,7 +315,13 @@ class Prep():
         else:
             meta['tmdb_manual'] = meta.get('tmdb', None)
 
-        
+        # Check for TMDb not found
+        uuid = meta.get('uuid', '')
+        if meta.get('unattended') and (meta.get('tmdb') is None or int(meta['tmdb']) == 0):
+            meta['tmdb_not_found'] = True
+            console.print(f"[red]Unable to find TMDb match for {Path(uuid).stem}")
+            return meta
+            
         # If no tmdb, use imdb for meta
         if int(meta['tmdb']) == 0:
             meta = await self.imdb_other_meta(meta)
@@ -326,7 +333,7 @@ class Prep():
         if meta.get('imdb_id', None) == None:
             meta['imdb_id'] = await self.search_imdb(filename, meta['search_year'])
         if meta.get('imdb_info', None) == None and int(meta['imdb_id']) != 0:
-            meta['imdb_info'] = await self.get_imdb_info(meta['imdb_id'], meta)
+            meta['imdb_info'] = await self.get_imdb_info(meta['imdb_id'], meta)            
         if meta.get('tag', None) == None:
             meta['tag'] = self.get_tag(video, meta)
         else:
@@ -354,7 +361,7 @@ class Prep():
         else:
             meta['video_encode'], meta['video_codec'], meta['has_encode_settings'], meta['bit_depth'] = self.get_video_encode(mi, meta['type'], bdinfo)
         
-        meta['edition'], meta['repack'] = self.get_edition(meta['path'], bdinfo, meta['filelist'], meta.get('manual_edition'))
+        meta['edition'], meta['repack'], meta['cut'], meta['ratio'] = self.get_edition(meta['path'], bdinfo, meta['filelist'], meta.get('manual_edition'))
         if "REPACK" in meta.get('edition', ""):
             meta['repack'] = re.search(r"REPACK[\d]?", meta['edition'])[0]
             meta['edition'] = re.sub(r"REPACK[\d]?", "", meta['edition']).strip().replace('  ', ' ')
@@ -1000,18 +1007,18 @@ class Prep():
 
     def valid_ss_time(self, ss_times, num_screens, length):
         valid_time = False
-        while valid_time != True:
+        while not valid_time:
             valid_time = True
-            if ss_times != []:
-                sst = random.randint(round(length/5), round(length/2))
+            if ss_times:
+                sst = random.randint(round(length / 5), round(length / 2))
+                tolerance = length / 10 / num_screens
                 for each in ss_times:
-                    tolerance = length / 10 / num_screens
                     if abs(sst - each) <= tolerance:
                         valid_time = False
-                if valid_time == True:
+                if valid_time:
                     ss_times.append(sst)
             else:
-                ss_times.append(random.randint(round(length/5), round(length/2)))
+                ss_times.append(random.randint(round(length / 5), round(length / 2)))
         return ss_times
 
     def optimize_images(self, image):
@@ -1102,11 +1109,12 @@ class Prep():
                 search.movie(query=filename, year=search_year)
             elif category == "TV":
                 search.tv(query=filename, first_air_date_year=search_year)
-            if meta.get('tmdb_manual') != None:
+            
+            if meta.get('tmdb_manual') is not None:
                 meta['tmdb'] = meta['tmdb_manual']
             else:
                 meta['tmdb'] = search.results[0]['id']
-                meta['category'] = category 
+                meta['category'] = category
         except IndexError:
             try:
                 if category == "MOVIE":
@@ -1120,22 +1128,31 @@ class Prep():
                     category = "TV"
                 else:
                     category = "MOVIE"
+                
                 if attempted <= 1:
                     attempted += 1
                     meta = await self.get_tmdb_id(filename, search_year, meta, category, untouched_filename, attempted)
                 elif attempted == 2:
                     attempted += 1
-                    meta = await self.get_tmdb_id(anitopy.parse(guessit(untouched_filename, {"excludes" : ["country", "language"]})['title'])['anime_title'], search_year, meta, meta['category'], untouched_filename, attempted)
-                if meta['tmdb'] in (None, ""):
+                    parsed_title = anitopy.parse(guessit(untouched_filename, {"excludes": ["country", "language"]})['title'])['anime_title']
+                    meta = await self.get_tmdb_id(parsed_title, search_year, meta, meta['category'], untouched_filename, attempted)
+
+                if meta.get('tmdb') in (None, ""):
                     console.print(f"[red]Unable to find TMDb match for {filename}")
-                    if meta.get('mode', 'discord') == 'cli':
-                        tmdb_id = cli_ui.ask_string("Please enter tmdb id in this format: tv/12345 or movie/12345")
+                    if meta.get('unattended'):
+                        meta['tmdb_not_found'] = True
+                        return meta
+                    else:
+                        tmdb_id = Prompt.ask(f"Please enter tmdb id in this format: tv/12345 or movie/12345\n")
                         parser = Args(config=self.config)
                         meta['category'], meta['tmdb'] = parser.parse_tmdb_id(id=tmdb_id, category=meta.get('category'))
                         meta['tmdb_manual'] = meta['tmdb']
                         return meta
 
         return meta
+
+
+
     
     async def tmdb_other_meta(self, meta):
         
@@ -1155,7 +1172,20 @@ class Prep():
                     return meta
         if meta['category'] == "MOVIE":
             movie = tmdb.Movies(meta['tmdb'])
-            response = movie.info()
+            while True:  # Keep looping until a valid response is obtained
+                try:
+                    response = movie.info()
+                    break 
+                except HTTPError as e:
+                    if e.response.status_code == 404:
+                        console.print("[red]The TMDb ID you entered could not be found. Please make sure the ID is correct and try again.")
+                        tmdb_id = Prompt.ask(f"Please enter tmdb id in this format: tv/12345 or movie/12345\n")
+                        parser = Args(config=self.config)
+                        meta['category'], meta['tmdb'] = parser.parse_tmdb_id(id=tmdb_id, category=meta.get('category'))
+                        meta['tmdb_manual'] = meta['tmdb']
+                        movie = tmdb.Movies(meta['tmdb'])  # Update the movie object with the new TMDb ID
+                    else:
+                        raise
             meta['title'] = response['title']
             if response['release_date']:
                 try:
@@ -1424,11 +1454,6 @@ class Prep():
         if not episodes:
             episodes = 0
         return romaji, mal_id, eng_title, season_year, episodes
-
-
-
-
-
 
 
 
@@ -1905,6 +1930,8 @@ class Prep():
         guess = guessit(video)
         tag = guess.get('release_group', 'NOGROUP')
         repack = ""
+        cut = ""
+        ratio = ""
         edition = ""
         if bdinfo != None:
             try:
@@ -1924,8 +1951,24 @@ class Prep():
 
         video = video.upper().replace('.', ' ').replace(tag, '').replace('-', '')
 
-        if "OPEN MATTE" in video:
-            edition = edition + "Open Matte"
+        # if "OPEN MATTE" in video.upper():
+        #     ratio = "Open Matte"
+        cuts = {
+            "director cut": "Director's Cut",
+            "extended": "Extended",
+            "special edition": "Special Edition",
+            "unrated": "Unrated",
+            "uncut": "Uncut",
+            "super duper": "Super Duper Cut"
+        }
+        for key, value in cuts.items():
+            if key in video.lower():
+                cut = value
+
+        ratios = {"IMAX": "IMAX", "OPEN MATTE": "Open Matte", "MAR": "MAR"}
+        for key, value in ratios.items():
+            if key in video.upper():
+                ratio = value
 
         if manual_edition != None:
             if isinstance(manual_edition, list):
@@ -1933,8 +1976,10 @@ class Prep():
             edition = str(manual_edition)
         if manual_edition is not None and ("AI" in manual_edition.upper() or "UPSCALE" in manual_edition.upper()):
             manual_edition = " AI UPSCALE"              
-        if "AI" in (video.upper() or edition.upper()) or "UPSCALE" in (video.upper() or edition.upper()):
-            edition = " AI UPSCALE"         
+        if "AI" in edition.upper() or "UPSCALE" in edition.upper():
+            edition = "AI UPSCALE" 
+        if "AI" in video.upper() and "UPSCALE" in video.upper():
+            edition = "AI UPSCALE"            
         if " REPACK " in (video or edition) or "V2" in video:
             repack = "REPACK"
         if " REPACK2 " in (video or edition) or "V3" in video:
@@ -1958,11 +2003,9 @@ class Prep():
         #     other = ""
         # if " 3D " in other:
         #     edition = edition + " 3D "
-        # if edition == None or edition == None:
+        # if edition == None or edition == None:s
         #     edition = ""
-        return edition, repack
-
-
+        return edition, repack, cut, ratio
 
 
 
@@ -1982,19 +2025,21 @@ class Prep():
                 if len(no_sample_globs) == 1:
                     path = meta['filelist'][0]
         if meta['full_dir'] or meta['is_disc']:
-            include, exclude = "", ['._*']
+            desc = Path(meta['uuid']).stem
+            include = ""
+            exclude = ['._*', 'description.txt', desc + '.txt']
         else:
             exclude = ["*.*", "*sample.mkv", "!sample*.*", "._*"] 
             include = ["*.mkv", "*.mp4", "*.ts"]
         torrent = Torrent(path,
             trackers = ["https://fake.tracker"],
-            source = "CvT",
+            source = "", #unstamped for easy storage finding for reuse via hash
             private = True,
             exclude_globs = exclude or [],
             include_globs = include or [],
             creation_date = datetime.now(),
-            comment = "Created by Upload Assistant (CvT Edition)",
-            created_by = "Created by Upload Assistant (CvT Edition)")
+            comment = "Created by Uploadrr",
+            created_by = "Created by Uploadrr")
         file_size = torrent.size
         if file_size < 268435456: # 256 MiB File / 256 KiB Piece Size
             piece_size = 18
@@ -2023,7 +2068,7 @@ class Prep():
         else:
             torrent_creation = self.config['DEFAULT'].get('torrent_creation', 'torf')
         if torrent_creation == 'torrenttools':
-            args = ['torrenttools', 'create', '-a', 'https://fake.tracker', '--private', 'on', '--piece-size', str(2**piece_size), '--created-by', "Upload-Assistant (CvT Edition)", '--no-cross-seed','-o', f"{meta['base_dir']}/tmp/{meta['uuid']}/{output_filename}.torrent"]
+            args = ['torrenttools', 'create', '-a', 'https://fake.tracker', '--private', 'on', '--piece-size', str(2**piece_size), '--created-by', "Created by Uploadrr", '--no-cross-seed','-o', f"{meta['base_dir']}/tmp/{meta['uuid']}/{output_filename}.torrent"]
             if not meta['full_dir'] or meta['is_disc']:
                 args.extend(['--include', r'^.*\.(mkv|mp4|ts)$'])
             args.append(path)
@@ -2048,8 +2093,19 @@ class Prep():
 
     
     def torf_cb(self, torrent, filepath, pieces_done, pieces_total):
-        # print(f'{pieces_done/pieces_total*100:3.0f} % done')
-        cli_ui.info_progress("Hashing...", pieces_done, pieces_total)
+        if not hasattr(self, 'progress'):
+            self.progress = Progress(
+                "[progress.description]{task.description}",
+                BarColumn(),
+                "[progress.percentage]{task.percentage:>3.1f}%",
+                TimeRemainingColumn(),
+            )
+            self.task = self.progress.add_task("Hashing...", total=pieces_total)
+            self.progress.start()
+        self.progress.update(self.task, completed=pieces_done)
+        if pieces_done >= pieces_total:
+            self.progress.stop()
+            del self.progress
 
     def create_random_torrents(self, base_dir, uuid, num, path):
         manual_name = re.sub(r"[^0-9a-zA-Z\[\]\'\-]+", ".", os.path.basename(path))
@@ -2064,8 +2120,8 @@ class Prep():
             base_torrent = Torrent.read(torrentpath)
             base_torrent.creation_date = datetime.now()
             base_torrent.trackers = ['https://fake.tracker']
-            base_torrent.comment = "Created by Upload Assistant (CvT Edition)"
-            base_torrent.created_by = "Created by Upload Assistant (CvT Edition)"
+            base_torrent.comment = "Created by Uploadrr"
+            base_torrent.created_by = "Created by Uploadrr"
             #Remove Un-whitelisted info from torrent
             for each in list(base_torrent.metainfo['info']):
                 if each not in ('files', 'length', 'name', 'piece length', 'pieces', 'private', 'source'):
@@ -2073,25 +2129,24 @@ class Prep():
             for each in list(base_torrent.metainfo):
                 if each not in ('announce', 'comment', 'creation date', 'created by', 'encoding', 'info'):
                     base_torrent.metainfo.pop(each, None)
-            base_torrent.source = 'CvT'
+            base_torrent.source = '' #unstamped for easy storage finding for reuse via hash
             base_torrent.private = True
             Torrent.copy(base_torrent).write(f"{base_dir}/tmp/{uuid}/BASE.torrent", overwrite=True)
-
-
+##TODO work on hash finding should iterate through hashes using stamp list.
 
 
     """
     Upload Screenshots
     """
     def upload_screens(self, meta, screens, img_host_num, i, total_screens, custom_img_list, return_dict):
-        # if int(total_screens) != 0 or len(meta.get('image_list', [])) > total_screens:
-        #     if custom_img_list == []:
-        #         console.print('[yellow]Uploading Screens')   
+        if int(total_screens) != 0 or len(meta.get('image_list', [])) > total_screens:
+            if custom_img_list == []:
+                console.print('[yellow]Uploading Screens')   
         os.chdir(f"{meta['base_dir']}/tmp/{meta['uuid']}")
         img_host = self.config['DEFAULT'][f'img_host_{img_host_num}']  
-        # if img_host != self.img_host and meta.get('imghost', None) == None:  ##CvT TEST
-        #     img_host = self.img_host
-        #     i -= 1
+        if img_host != self.img_host and meta.get('imghost', None) == None: 
+            img_host = self.img_host
+            i -= 1
         if img_host_num == 1 and meta.get('imghost') != img_host:
             img_host = meta.get('imghost')
             img_host_num = 0
@@ -2226,7 +2281,6 @@ class Prep():
                             image_dict['img_url'] = img_url
                             image_dict['raw_url'] = raw_url
                             image_list.append(image_dict)
-                            # cli_ui.info_count(i, total_screens, "Uploaded")
                             progress.advance(upload_task)
                             i += 1
                         time.sleep(0.5)
@@ -2254,11 +2308,6 @@ class Prep():
                     image_list.append(image_dict)
         return image_list
 
-
-
-
-
-
     async def get_name(self, meta):
         type = meta.get('type', "")
         title = meta.get('title',"")
@@ -2270,6 +2319,8 @@ class Prep():
         audio = meta.get('audio', "")
         service = meta.get('service', "")
         season = meta.get('season', "")
+        cut = meta.get ('cut', "")
+        ratio = meta.get ('ratio', "")
         episode = meta.get('episode', "")
         part = meta.get('part', "")
         repack = meta.get('repack', "")
@@ -2312,60 +2363,60 @@ class Prep():
         if meta['category'] == "MOVIE": #MOVIE SPECIFIC
             if type == "DISC": #Disk
                 if meta['is_disc'] == 'BDMV':
-                    name = f"{title} {alt_title} {year} {three_d} {edition} {repack} {resolution} {region} {uhd} {source} {hdr} {video_codec} {audio}"
+                    name = f"{title} {alt_title} {year} {three_d} {cut} {ratio} {edition} {repack} {resolution} {region} {uhd} {source} {hdr} {video_codec} {audio}"
                     potential_missing = ['edition', 'region', 'distributor']
                 elif meta['is_disc'] == 'DVD': 
-                    name = f"{title} {alt_title} {year} {edition} {repack} {source} {dvd_size} {audio}"
+                    name = f"{title} {alt_title} {year} {cut} {ratio} {edition} {repack} {source} {dvd_size} {audio}"
                     potential_missing = ['edition', 'distributor']
                 elif meta['is_disc'] == 'HDDVD':
-                    name = f"{title} {alt_title} {year} {edition} {repack} {resolution} {source} {video_codec} {audio}"
+                    name = f"{title} {alt_title} {year} {cut} {ratio} {edition} {repack} {resolution} {source} {video_codec} {audio}"
                     potential_missing = ['edition', 'region', 'distributor']
             elif type == "REMUX" and source in ("BluRay", "HDDVD"): #BluRay/HDDVD Remux
-                name = f"{title} {alt_title} {year} {three_d} {edition} {repack} {resolution} {uhd} {source} REMUX {hdr} {video_codec} {audio}" 
+                name = f"{title} {alt_title} {year} {three_d} {cut} {ratio} {edition} {repack} {resolution} {uhd} {source} REMUX {hdr} {video_codec} {audio}" 
                 potential_missing = ['edition', 'description']
             elif type == "REMUX" and source in ("PAL DVD", "NTSC DVD", "DVD"): #DVD Remux
-                name = f"{title} {alt_title} {year} {edition} {repack} {source} REMUX  {audio}" 
+                name = f"{title} {alt_title} {year} {cut} {ratio} {edition} {repack} {source} REMUX  {audio}" 
                 potential_missing = ['edition', 'description']
             elif type == "ENCODE": #Encode
-                name = f"{title} {alt_title} {year} {edition} {repack} {resolution} {uhd} {source} {audio} {hdr} {video_encode}"  
+                name = f"{title} {alt_title} {year} {cut} {ratio} {edition} {repack} {resolution} {uhd} {source} {audio} {hdr} {video_encode}"  
                 potential_missing = ['edition', 'description']
             elif type == "WEBDL": #WEB-DL
-                name = f"{title} {alt_title} {year} {edition} {repack} {resolution} {uhd} {service} WEB-DL {audio} {hdr} {video_encode}"
+                name = f"{title} {alt_title} {year} {cut} {ratio} {edition} {repack} {resolution} {uhd} {service} WEB-DL {audio} {hdr} {video_encode}"
                 potential_missing = ['edition', 'service']
             elif type == "WEBRIP": #WEBRip
-                name = f"{title} {alt_title} {year} {edition} {repack} {resolution} {uhd} {service} WEBRip {audio} {hdr} {video_encode}"
+                name = f"{title} {alt_title} {year} {cut} {ratio} {edition} {repack} {resolution} {uhd} {service} WEBRip {audio} {hdr} {video_encode}"
                 potential_missing = ['edition', 'service']
             elif type == "HDTV": #HDTV
-                name = f"{title} {alt_title} {year} {edition} {repack} {resolution} {source} {audio} {video_encode}"
+                name = f"{title} {alt_title} {year} {cut} {ratio} {edition} {repack} {resolution} {source} {audio} {video_encode}"
                 potential_missing = []
         elif meta['category'] == "TV": #TV SPECIFIC
             if type == "DISC": #Disk
                 if meta['is_disc'] == 'BDMV':
-                    name = f"{title} {year} {alt_title} {season}{episode} {three_d} {edition} {repack} {resolution} {region} {uhd} {source} {hdr} {video_codec} {audio}"
+                    name = f"{title} {year} {alt_title} {season}{episode} {three_d} {cut} {ratio} {edition} {repack} {resolution} {region} {uhd} {source} {hdr} {video_codec} {audio}"
                     potential_missing = ['edition', 'region', 'distributor']
                 if meta['is_disc'] == 'DVD':
-                    name = f"{title} {alt_title} {season}{episode}{three_d} {edition} {repack} {source} {dvd_size} {audio}"
+                    name = f"{title} {alt_title} {season}{episode}{three_d} {cut} {ratio} {edition} {repack} {source} {dvd_size} {audio}"
                     potential_missing = ['edition', 'distributor']
                 elif meta['is_disc'] == 'HDDVD':
-                    name = f"{title} {alt_title} {year} {edition} {repack} {resolution} {source} {video_codec} {audio}"
+                    name = f"{title} {alt_title} {year} {cut} {ratio} {edition} {repack} {resolution} {source} {video_codec} {audio}"
                     potential_missing = ['edition', 'region', 'distributor']
             elif type == "REMUX" and source in ("BluRay", "HDDVD"): #BluRay Remux
-                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {three_d} {edition} {repack} {resolution} {uhd} {source} REMUX {hdr} {video_codec} {audio}" #SOURCE
+                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {three_d} {cut} {ratio} {edition} {repack} {resolution} {uhd} {source} REMUX {hdr} {video_codec} {audio}" #SOURCE
                 potential_missing = ['edition', 'description']
             elif type == "REMUX" and source in ("PAL DVD", "NTSC DVD"): #DVD Remux
-                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {edition} {repack} {source} REMUX {audio}" #SOURCE
+                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {cut} {ratio} {edition} {repack} {source} REMUX {audio}" #SOURCE
                 potential_missing = ['edition', 'description']
             elif type == "ENCODE": #Encode
-                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {edition} {repack} {resolution} {uhd} {source} {audio} {hdr} {video_encode}" #SOURCE
+                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {cut} {ratio} {edition} {repack} {resolution} {uhd} {source} {audio} {hdr} {video_encode}" #SOURCE
                 potential_missing = ['edition', 'description']
             elif type == "WEBDL": #WEB-DL
-                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {edition} {repack} {resolution} {uhd} {service} WEB-DL {audio} {hdr} {video_encode}"
+                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {cut} {ratio} {edition} {repack} {resolution} {uhd} {service} WEB-DL {audio} {hdr} {video_encode}"
                 potential_missing = ['edition', 'service']
             elif type == "WEBRIP": #WEBRip
-                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {edition} {repack} {resolution} {uhd} {service} WEBRip {audio} {hdr} {video_encode}"
+                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {cut} {ratio} {edition} {repack} {resolution} {uhd} {service} WEBRip {audio} {hdr} {video_encode}"
                 potential_missing = ['edition', 'service']
             elif type == "HDTV": #HDTV
-                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {edition} {repack} {resolution} {source} {audio} {video_encode}"
+                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {cut} {ratio} {edition} {repack} {resolution} {source} {audio} {video_encode}"
                 potential_missing = []
 
 
@@ -2726,77 +2777,121 @@ class Prep():
             name = name.replace(char, '-')
         return name
 
-    
     async def gen_desc(self, meta):
         desclink = meta.get('desclink', None)
-        descfile = meta.get('descfile', None)
-        ptp_desc = blu_desc = ""
-        desc_source = []
-        with open(f"{meta['base_dir']}/tmp/{meta['uuid']}/DESCRIPTION.txt", 'w', newline="", encoding='utf8') as description:
-            description.seek(0)
-            if (desclink, descfile, meta['desc']) == (None, None, None):
-                if meta.get('ptp_manual') != None:
-                    desc_source.append('PTP')
-                if meta.get('blu_manual') != None:
-                    desc_source.append('BLU')
-                if len(desc_source) != 1:
-                    desc_source = None
-                else:
-                    desc_source = desc_source[0]
+        auto_desc = meta.get('auto_desc', False)
+        description_path = f"{meta['base_dir']}/tmp/{meta['uuid']}/DESCRIPTION.txt"
+        descfile_content = ""
+        custom_desc_written = False
 
-                if meta.get('ptp', None) != None and str(self.config['TRACKERS'].get('PTP', {}).get('useAPI')).lower() == "true" and desc_source in ['PTP', None]:
+        with open(description_path, 'w', newline="", encoding='utf8') as description:
+            if (desclink, meta.get('descfile', None), meta['desc']) == (None, None, None):
+                desc_source = []
+                if meta.get('ptp_manual') is not None:
+                    desc_source.append('PTP')
+                if meta.get('blu_manual') is not None:
+                    desc_source.append('BLU')
+                desc_source = desc_source[0] if len(desc_source) == 1 else None
+
+                if meta.get('ptp') and str(self.config['TRACKERS'].get('PTP', {}).get('useAPI')).lower() == "true" and desc_source in ['PTP', None]:
                     ptp = PTP(config=self.config)
                     ptp_desc = await ptp.get_ptp_description(meta['ptp'], meta['is_disc'])
-                    if ptp_desc.replace('\r\n', '').replace('\n', '').strip() != "":
+                    if ptp_desc.strip():
                         description.write(ptp_desc)
                         description.write("\n")
                         meta['description'] = 'PTP'
+                        custom_desc_written = True
 
-                if ptp_desc == "" and meta.get('blu_desc', '').rstrip() not in [None, ''] and desc_source in ['BLU', None]:
-                    if meta.get('blu_desc', '').strip().replace('\r\n', '').replace('\n', '') != '':
-                        description.write(meta['blu_desc'])
+                if not custom_desc_written and meta.get('blu_desc', '').strip() and desc_source in ['BLU', None]:
+                    blu_desc = meta['blu_desc'].strip()
+                    if blu_desc:
+                        description.write(blu_desc)
                         meta['description'] = 'BLU'
+                        custom_desc_written = True
 
-            if meta.get('desc_template', None) != None:
+            if meta.get('desc_template'):
                 from jinja2 import Template
                 with open(f"{meta['base_dir']}/data/templates/{meta['desc_template']}.txt", 'r') as f:
-                    desc_templater = Template(f.read())
-                    template_desc = desc_templater.render(meta)
-                    if template_desc.strip() != "":
+                    desc_template = Template(f.read())
+                    template_desc = desc_template.render(meta)
+                    if template_desc.strip():
                         description.write(template_desc)
                         description.write("\n")
+                        custom_desc_written = True
 
             if meta['nfo'] != False:
-                description.write("[code]")
                 nfo = glob.glob("*.nfo")[0]
-                description.write(open(nfo, 'r', encoding="utf-8").read())
-                description.write("[/code]")
-                description.write("\n")
+                with open(nfo, 'r', encoding="utf-8") as nfo_file:
+                    nfo_content = nfo_file.read()
+                description.write("\n" + "[code]")
+                description.write(nfo_content)
+                description.write("[/code]" + "\n")
                 meta['description'] = "CUSTOM"
-            if desclink != None:
+                custom_desc_written = True
+
+            if desclink:
                 parsed = urllib.parse.urlparse(desclink.replace('/raw/', '/'))
                 split = os.path.split(parsed.path)
-                if split[0] != '/':
-                    raw = parsed._replace(path=f"{split[0]}/raw/{split[1]}")
-                else:
-                    raw = parsed._replace(path=f"/raw{parsed.path}")
+                raw = parsed._replace(path=f"{split[0]}/raw/{split[1]}") if split[0] != '/' else parsed._replace(path=f"/raw{parsed.path}")
                 raw = urllib.parse.urlunparse(raw)
                 description.write(requests.get(raw).text)
                 description.write("\n")
                 meta['description'] = "CUSTOM"
-                
-            if descfile != None:
-                if os.path.isfile(descfile) == True:
-                    text = open(descfile, 'r').read()
-                    description.write(text)
+                custom_desc_written = True
+
+            if auto_desc:
+                path = Path(meta.get('path', ''))
+                uuid = meta.get('uuid', '')
+                if uuid:
+                    uuid = Path(uuid).stem
+                desc_folder = self.config['AUTO']['description_folder']
+                descfile = None
+
+                if desc_folder:
+                    desc_folder = Path(desc_folder)
+                    if desc_folder.is_dir():
+                        potential_file = desc_folder / f"{uuid}.txt"
+                        if potential_file.is_file():
+                            descfile = potential_file
+
+                if descfile is None and path.exists():
+                    if path.is_file():
+                        descfile = path.with_suffix('.txt')
+                        if not descfile.is_file():
+                            descfile = path.parent / f"{uuid}.txt"
+                    elif path.is_dir():
+                        descfile = path / f"{uuid}.txt"
+                        if not descfile.is_file():
+                            descfile = path / 'description.txt'
+
+                if descfile and descfile.is_file():
+                    with descfile.open('r') as f:
+                        descfile_content = f.read()
+                        description.write("\n" + descfile_content + "\n")
+                        meta['description'] = "CUSTOM"
+                        custom_desc_written = True
+
+                desc = meta.get('desc')
+                if desc and desc != descfile_content:
+                    description.write("\n" + desc + "\n")
+                    meta['description'] = "CUSTOM"
+                    custom_desc_written = True
+
+            if meta.get('descfile') and os.path.isfile(meta['descfile']):
+                with open(meta['descfile'], 'r') as f:
+                    descfile_text = f.read()
+                    description.write("\n" + descfile_text + "\n")
                 meta['description'] = "CUSTOM"
-            if meta['desc'] != None:
-                description.write(meta['desc'])
-                description.write("\n")
+                custom_desc_written = True
+
+            if meta.get('desc'):
+                description.write("\n" + meta['desc'] + "\n")
                 meta['description'] = "CUSTOM"
-            description.write("\n")
+                custom_desc_written = True
+
         return meta
-        
+
+    
     async def tag_override(self, meta):
         with open(f"{meta['base_dir']}/data/tags.json", 'r', encoding="utf-8") as f:
             tags = json.load(f)
@@ -2820,7 +2915,6 @@ class Prep():
                     else:
                         meta[key] = value.get(key)
         return meta
-    
 
     async def package(self, meta):
         if meta['tag'] == "":

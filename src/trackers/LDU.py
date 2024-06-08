@@ -4,6 +4,7 @@ import asyncio
 import requests
 from difflib import SequenceMatcher
 import os
+import re
 import platform
 from datetime import datetime
 
@@ -13,24 +14,25 @@ from src.console import console
 
 class LDU():
 
-    ###############################################################
-    ########                    EDIT ME                    ########
-    ###############################################################
-
     def __init__(self, config):
         self.config = config
         self.tracker = 'LDU'
         self.source_flag = 'LDU'
         self.upload_url = 'https://theldu.to/api/torrents/upload'
         self.search_url = 'https://theldu.to/api/torrents/filter'
-        self.banned_groups = [""]
+        self.banned_groups = ['example']
         pass
     
     async def get_cat_id(self, category_name, genres, keywords, service, edition, meta):
         adult = meta.get('adult', False)
         release_date = meta.get('full_date', '')
         if isinstance(release_date, str):
-            release_date = datetime.strptime(release_date, '%Y-%m-%d')
+            try:
+                release_date = datetime.strptime(release_date, '%Y-%m-%d')
+            except ValueError:
+                year = meta.get('year')
+                if year is not None:
+                    release_date = datetime.strptime(f'{year}-01-01', '%Y-%m-%d') 
         year = meta.get('year','')
         tag = self.get_language_tag(meta)
         if tag:
@@ -45,7 +47,7 @@ class LDU():
         if category_name == 'MOVIE':
             if adult and ('hentai' in map(str.strip, keywords.lower().split(',')) or 'animation' in map(str.strip, keywords.lower().split(','))):
                 category_id = '10'
-            elif adult == True:
+            elif adult is True:
                 category_id = '6'
             elif '???' in tags[0]:
                 category_id = '27'
@@ -76,7 +78,7 @@ class LDU():
         elif category_name == 'TV':
             if adult and ('hentai' in map(str.strip, keywords.lower().split(',')) or 'animation' in map(str.strip, keywords.lower().split(','))):
                 category_id = '10'
-            elif adult == True:
+            elif adult is True:
                 category_id = '6'            
             elif tag and not all(char.isalpha() or char.isspace() for char in tags[0]):
                 category_id = '31'
@@ -174,7 +176,7 @@ class LDU():
             'sticky' : 0,
         }
         # Internal
-        if self.config['TRACKERS'][self.tracker].get('internal', False) == True:
+        if self.config['TRACKERS'][self.tracker].get('internal', False):
             if meta['tag'] != "" and (meta['tag'][1:] in self.config['TRACKERS'][self.tracker].get('internal_groups', [])):
                 data['internal'] = 1
                 
@@ -183,26 +185,49 @@ class LDU():
         if distributor_id != 0:
             data['distributor_id'] = distributor_id
         if meta.get('category') == "TV":
-            data['season_number'] = meta.get('season_int', '0')
-            data['episode_number'] = meta.get('episode_int', '0')
+            data['season_number'] = int(meta.get('season_int', '0'))
+            data['episode_number'] = int(meta.get('episode_int', '0'))
         headers = {
-            'User-Agent': f'Upload Assistant/v. CvT 0.4 ({platform.system()} {platform.release()})'
+            'User-Agent': f'Uploadrr / v1.0 ({platform.system()} {platform.release()})'
         }
         params = {
             'api_token' : self.config['TRACKERS'][self.tracker]['api_key'].strip()
         }
         
-        if meta['debug'] == False:
-            response = requests.post(url=self.upload_url, files=files, data=data, headers=headers, params=params)
+        if not meta['debug']:
+            success = 'Unknown'
             try:
-                console.print(response.json())
-            except:
-                console.print("It may have uploaded, go check")
-                return 
-        else:
-            console.print(f"[cyan]Request Data:")
-            console.print(data)
-        open_torrent.close()
+                response = requests.post(url=self.upload_url, files=files, data=data, headers=headers, params=params)
+                response.raise_for_status()                
+                response_json = response.json()
+                success = response_json.get('success', False)
+                data = response_json.get('data', {})
+            except Exception as e:
+                console.print(f"[red]Encountered Error: {e}[/red]\n[bold yellow]May have uploaded, please go check..")
+
+            if success == 'Unknown':
+                console.print("[bold yellow]Status of upload is unknown, please go check..")
+                success = False
+            elif success:
+                console.print("[bold green]Torrent uploaded successfully!")
+            else:
+                console.print("[bold red]Torrent upload failed.")
+
+            if data:
+                if 'name' in data and 'The name has already been taken.' in data['name']:
+                    console.print("[red]Name has already been taken.")
+                if 'info_hash' in data and 'The info hash has already been taken.' in data['info_hash']:
+                    console.print("[red]Info hash has already been taken.")                
+            else:
+                console.print("[cyan]Request Data:")
+                console.print(data)
+    
+            try:
+                open_torrent.close()
+            except Exception as e:
+                console.print(f"[red]Failed to close torrent file: {e}[/red]")
+
+            return success 
 
     def get_language_tag(self, meta):
         audio_lang = []
@@ -281,6 +306,8 @@ class LDU():
             video_codec = meta.get('video_codec', "")
             video_encode = meta.get('video_encode', video_codec)
         edition = meta.get('edition', "")
+        cut = meta.get('cut', "")
+        ratio = meta.get('ratio', "")
 
         if meta['category'] == "TV":
             try:
@@ -294,11 +321,11 @@ class LDU():
                         raise ValueError("No IMDB Year Found..")
                 except (KeyError, ValueError):
                     year = ""
-        if meta.get('no_season', False) == True:
+        if meta.get('no_season', False) is True:
             season = ''
-        if meta.get('no_year', False) == True:
+        if meta.get('no_year', False) is True:
             year = ''
-        if meta.get('no_aka', False) == True:
+        if meta.get('no_aka', False) is True:
             alt_title = ''
         if meta['debug']:
             console.log("[cyan]get_name cat/type")
@@ -311,60 +338,60 @@ class LDU():
         if meta['category'] == "MOVIE": #MOVIE SPECIFIC
             if type == "DISC": #Disk
                 if meta['is_disc'] == 'BDMV':
-                    name = f"{title} [{alt_title}] ({year}) {three_d} [{edition} {repack} {resolution} {region} {uhd} {source} {hdr} {video_codec} {audio}{tag}] {lang_tag}"
+                    name = f"{title} [{alt_title}] ({year}) {three_d} [{cut} {ratio} {edition} {repack} {resolution} {region} {uhd} {source} {hdr} {video_codec} {audio}{tag}] {lang_tag}"
                     potential_missing = ['edition', 'region', 'distributor']
                 elif meta['is_disc'] == 'DVD': 
-                    name = f"{title} {alt_title} ({year}) [{edition} {repack} {source} {dvd_size} {audio}{tag}] {lang_tag}"
+                    name = f"{title} {alt_title} ({year}) [{cut} {ratio} {edition} {repack} {source} {dvd_size} {audio}{tag}] {lang_tag}"
                     potential_missing = ['edition', 'distributor']
                 elif meta['is_disc'] == 'HDDVD':
-                    name = f"{title} {alt_title} ({year}) [{edition} {repack} {resolution} {source} {video_codec}] {audio}{tag}] {lang_tag}"
+                    name = f"{title} {alt_title} ({year}) [{cut} {ratio} {edition} {repack} {resolution} {source} {video_codec}] {audio}{tag}] {lang_tag}"
                     potential_missing = ['edition', 'region', 'distributor']
             elif type == "REMUX" and source in ("BluRay", "HDDVD"): #BluRay/HDDVD Remux
-                name = f"{title} {alt_title} ({year}) {three_d} [{edition} {repack} {resolution} {uhd} {source} REMUX {hdr} {video_codec} {audio}{tag}] {lang_tag}" 
+                name = f"{title} {alt_title} ({year}) {three_d} [{cut} {ratio} {edition} {repack} {resolution} {uhd} {source} REMUX {hdr} {video_codec} {audio}{tag}] {lang_tag}" 
                 potential_missing = ['edition', 'description']
             elif type == "REMUX" and source in ("PAL DVD", "NTSC DVD", "DVD"): #DVD Remux
-                name = f"{title} {alt_title} ({year}) [{edition} {repack} {source} REMUX  {audio}{tag}] {lang_tag}" 
+                name = f"{title} {alt_title} ({year}) [{cut} {ratio} {edition} {repack} {source} REMUX  {audio}{tag}] {lang_tag}" 
                 potential_missing = ['edition', 'description']
             elif type == "ENCODE": #Encode
-                name = f"{title} {alt_title} ({year}) [{edition} {repack} {resolution} {uhd} {source} {audio} {hdr} {video_encode}{tag}] {lang_tag}"  
+                name = f"{title} {alt_title} ({year}) [{cut} {ratio} {edition} {repack} {resolution} {uhd} {source} {audio} {hdr} {video_encode}{tag}] {lang_tag}"  
                 potential_missing = ['edition', 'description']
             elif type == "WEBDL": #WEB-DL
-                name = f"{title} {alt_title} ({year}) [{edition} {repack} {resolution} {uhd} {service} WEB-DL {audio} {hdr} {video_encode}{tag}] {lang_tag}"
+                name = f"{title} {alt_title} ({year}) [{cut} {ratio} {edition} {repack} {resolution} {uhd} {service} WEB-DL {audio} {hdr} {video_encode}{tag}] {lang_tag}"
                 potential_missing = ['edition', 'service']
             elif type == "WEBRIP": #WEBRip
-                name = f"{title} {alt_title} ({year}) [{edition} {repack} {resolution} {uhd} {service} WEBRip {audio} {hdr} {video_encode}{tag}] {lang_tag}"
+                name = f"{title} {alt_title} ({year}) [{cut} {ratio} {edition} {repack} {resolution} {uhd} {service} WEBRip {audio} {hdr} {video_encode}{tag}] {lang_tag}"
                 potential_missing = ['edition', 'service']
             elif type == "HDTV": #HDTV
-                name = f"{title} {alt_title} ({year}) [{edition} {repack} {resolution} {source} {audio} {video_encode}{tag}] {lang_tag}"
+                name = f"{title} {alt_title} ({year}) [{cut} {ratio} {edition} {repack} {resolution} {source} {audio} {video_encode}{tag}] {lang_tag}"
                 potential_missing = []
         elif meta['category'] == "TV": #TV SPECIFIC
             if type == "DISC": #Disk
                 if meta['is_disc'] == 'BDMV':
-                    name = f"{title} ({year}) {alt_title} {season}{episode} {three_d} [{edition} {repack} {resolution} {region} {uhd} {source} {hdr} {video_codec} {audio}{tag}] {lang_tag}"
+                    name = f"{title} ({year}) {alt_title} {season}{episode} {three_d} [{cut} {ratio} {edition} {repack} {resolution} {region} {uhd} {source} {hdr} {video_codec} {audio}{tag}] {lang_tag}"
                     potential_missing = ['edition', 'region', 'distributor']
                 if meta['is_disc'] == 'DVD':
-                    name = f"{title} {alt_title} {season}{episode} {three_d} [{edition} {repack} {source} {dvd_size} {audio}{tag}] {lang_tag}"
+                    name = f"{title} {alt_title} {season}{episode} {three_d} [{cut} {ratio} {edition} {repack} {source} {dvd_size} {audio}{tag}] {lang_tag}"
                     potential_missing = ['edition', 'distributor']
                 elif meta['is_disc'] == 'HDDVD':
-                    name = f"{title} {alt_title} ({year}) [{edition} {repack} {resolution} {source} {video_codec} {audio}{tag}] {lang_tag}"
+                    name = f"{title} {alt_title} ({year}) [{cut} {ratio} {edition} {repack} {resolution} {source} {video_codec} {audio}{tag}] {lang_tag}"
                     potential_missing = ['edition', 'region', 'distributor']
             elif type == "REMUX" and source in ("BluRay", "HDDVD"): #BluRay Remux
-                name = f"{title} ({year}) {alt_title} {season}{episode} {episode_title} {part} [{three_d} {edition} {repack} {resolution} {uhd} {source} REMUX {hdr} {video_codec} {audio}{tag}] {lang_tag}" #SOURCE
+                name = f"{title} ({year}) {alt_title} {season}{episode} {episode_title} {part} [{three_d} {cut} {ratio} {edition} {repack} {resolution} {uhd} {source} REMUX {hdr} {video_codec} {audio}{tag}] {lang_tag}" #SOURCE
                 potential_missing = ['edition', 'description']
             elif type == "REMUX" and source in ("PAL DVD", "NTSC DVD"): #DVD Remux
-                name = f"{title} ({year}) {alt_title} {season}{episode} {episode_title} {part} [{edition} {repack} {source} REMUX {audio}{tag}] {lang_tag}" #SOURCE
+                name = f"{title} ({year}) {alt_title} {season}{episode} {episode_title} {part} [{cut} {ratio} {edition} {repack} {source} REMUX {audio}{tag}] {lang_tag}" #SOURCE
                 potential_missing = ['edition', 'description']
             elif type == "ENCODE": #Encode
-                name = f"{title} ({year}) {alt_title} {season}{episode} {episode_title} {part} [{edition} {repack} {resolution} {uhd} {source} {audio} {hdr} {video_encode}{tag}] {lang_tag}" #SOURCE
+                name = f"{title} ({year}) {alt_title} {season}{episode} {episode_title} {part} [{cut} {ratio} {edition} {repack} {resolution} {uhd} {source} {audio} {hdr} {video_encode}{tag}] {lang_tag}" #SOURCE
                 potential_missing = ['edition', 'description']
             elif type == "WEBDL": #WEB-DL
-                name = f"{title} ({year}) {alt_title} {season}{episode} {episode_title} {part} [{edition} {repack} {resolution} {uhd} {service} WEB-DL {audio} {hdr} {video_encode}{tag}] {lang_tag}"
+                name = f"{title} ({year}) {alt_title} {season}{episode} {episode_title} {part} [{cut} {ratio} {edition} {repack} {resolution} {uhd} {service} WEB-DL {audio} {hdr} {video_encode}{tag}] {lang_tag}"
                 potential_missing = ['edition', 'service']
             elif type == "WEBRIP": #WEBRip
-                name = f"{title} ({year}) {alt_title} {season}{episode} {episode_title} {part} [{edition} {repack} {resolution} {uhd} {service} WEBRip {audio} {hdr} {video_encode}{tag}] {lang_tag}"
+                name = f"{title} ({year}) {alt_title} {season}{episode} {episode_title} {part} [{cut} {ratio} {edition} {repack} {resolution} {uhd} {service} WEBRip {audio} {hdr} {video_encode}{tag}] {lang_tag}"
                 potential_missing = ['edition', 'service']
             elif type == "HDTV": #HDTV
-                name = f"{title} ({year}) {alt_title} {season}{episode} {episode_title} {part} [{edition} {repack} {resolution} {source} {audio} {video_encode}{tag}] {lang_tag}"
+                name = f"{title} ({year}) {alt_title} {season}{episode} {episode_title} {part} [{cut} {ratio} {edition} {repack} {resolution} {source} {audio} {video_encode}{tag}] {lang_tag}"
                 potential_missing = []
 
         parts = name.split()
@@ -378,15 +405,15 @@ class LDU():
     
 
     async def search_existing(self, meta):
-        dupes = []
+        dupes = {}
         console.print("[yellow]Searching for existing torrents on site...")
         params = {
-            'api_token' : self.config['TRACKERS'][self.tracker]['api_key'].strip(),
-            'tmdbId' : meta['tmdb'],
-            'categories[]' : await self.get_cat_id(meta['category'], meta.get('genres', ''), meta.get('keywords', ''), meta.get('service', ''), meta.get('edition', ''), meta),
-            'types[]' : await self.get_type_id(meta['type'], meta['edition']),
-            'resolutions[]' : await self.get_res_id(meta['resolution']),
-            'name' : ""
+            'api_token': self.config['TRACKERS'][self.tracker]['api_key'].strip(),
+            'tmdbId': meta['tmdb'],
+            'categories[]': await self.get_cat_id(meta['category'], meta.get('genres', ''), meta.get('keywords', ''), meta.get('service', ''), meta.get('edition', ''), meta),
+            'types[]': await self.get_type_id(meta['type'], meta['edition']),
+            'resolutions[]': await self.get_res_id(meta['resolution']),
+            'name': ""
         }
         if meta.get('edition', "") != "":
             params['name'] = params['name'] + f" {meta['edition']}"
@@ -394,12 +421,16 @@ class LDU():
             response = requests.get(url=self.search_url, params=params)
             response = response.json()
             for each in response['data']:
-                result = [each][0]['attributes']['name']
-                # difference = SequenceMatcher(None, meta['clean_name'], result).ratio()
-                # if difference >= 0.05:
-                dupes.append(result)
-        except:
-            console.print('[bold red]Unable to search for existing torrents on site. Either the site is down or your API key is incorrect')
+                result = each['attributes']['name']
+                split_result = re.split(r'(-\w*\])', result)
+                if len(split_result) > 1:
+                    result = split_result[0] + split_result[1]
+                size = each['attributes']['size']
+                if "🔥Eternal" not in result:
+                    dupes[result] = size
+        except Exception as e:
+            console.print(f'[bold red]Unable to search for existing torrents on site. Either the site is down or your API key is incorrect. Error: {e}')
             await asyncio.sleep(5)
 
         return dupes
+

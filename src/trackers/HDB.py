@@ -13,6 +13,8 @@ from src.bbcode import BBCODE
 from src.exceptions import *
 from src.console import console
 
+bbcode = BBCODE()
+
 class HDB():
 
     def __init__(self, config):
@@ -65,7 +67,7 @@ class HDB():
         # 4 = Capture
         if meta.get('type', '') == "HDTV":
             medium_id = 4
-            if meta.get('has_encode_settings', False) == True:
+            if meta.get('has_encode_settings', False):
                 medium_id = 3  
         # 3 = Encode
         if meta.get('type', '') in ("ENCODE", "WEBRIP"):
@@ -151,7 +153,7 @@ class HDB():
             tags.append(7)
         if "Atmos" in meta['audio']:
             tags.append(5)
-        if meta.get('silent', False) == True:
+        if meta.get('silent', False):
             console.print('[yellow]zxx audio track found, suggesting you tag as silent') #57
 
         # Video Metadata
@@ -192,7 +194,7 @@ class HDB():
         hdb_name = hdb_name.replace('Dubbed', '').replace('Dual-Audio', '')
         hdb_name = hdb_name.replace('REMUX', 'Remux')
         hdb_name = ' '.join(hdb_name.split())
-        hdb_name = re.sub("[^0-9a-zA-ZÀ-ÿ. :&+'\-\[\]]+", "", hdb_name)
+        hdb_name = re.sub(r"[^0-9a-zA-ZÀ-ÿ. :&+'\-\[\]]+", "", hdb_name)
         hdb_name = hdb_name.replace(' .', '.').replace('..', '.')
 
         return hdb_name 
@@ -259,7 +261,7 @@ class HDB():
             }
 
             # If internal, set 1
-            if self.config['TRACKERS'][self.tracker].get('internal', False) == True:
+            if self.config['TRACKERS'][self.tracker].get('internal', False):
                 if meta['tag'] != "" and (meta['tag'][1:] in self.config['TRACKERS'][self.tracker].get('internal_groups', [])):
                     data['internal'] = 1
             # If not BDMV fill mediainfo
@@ -302,7 +304,7 @@ class HDB():
 
 
     async def search_existing(self, meta):
-        dupes = []
+        dupes = {}
         console.print("[yellow]Searching for existing torrents on site...")
         url = "https://hdbits.org/api/torrents"
         data = {
@@ -321,8 +323,9 @@ class HDB():
             response = requests.get(url=url, data=json.dumps(data))
             response = response.json()
             for each in response['data']:
-                result = each['name']
-                dupes.append(result)
+                result = each['attributes']['name']
+                size = each['attributes']['size']
+                dupes[result] = size
         except:
             console.print('[bold red]Unable to search for existing torrents on site. Either the site is down or your passkey is incorrect')
             await asyncio.sleep(5)
@@ -335,10 +338,10 @@ class HDB():
     async def validate_credentials(self, meta):
         vapi =  await self.validate_api()
         vcookie = await self.validate_cookies(meta)
-        if vapi != True:
+        if vapi is not True:
             console.print('[red]Failed to validate API. Please confirm that the site is up and your passkey is valid.')
             return False
-        if vcookie != True:
+        if vcookie is not True:
             console.print('[red]Failed to validate cookies. Please confirm that the site is up and your passkey is valid.')
             return False
         return True
@@ -404,11 +407,9 @@ class HDB():
     async def edit_desc(self, meta):
         base = open(f"{meta['base_dir']}/tmp/{meta['uuid']}/DESCRIPTION.txt", 'r').read()
         with open(f"{meta['base_dir']}/tmp/{meta['uuid']}/[{self.tracker}]DESCRIPTION.txt", 'w') as descfile:
-            from src.bbcode import BBCODE
             # Add This line for all web-dls
-            if meta['type'] == 'WEBDL' and meta.get('service_longname', '') != '' and meta.get('description', None) == None:
+            if meta['type'] == 'WEBDL' and meta.get('service_longname', '') != '' and meta.get('description', None) is None:
                 descfile.write(f"[center][quote]This release is sourced from {meta['service_longname']}[/quote][/center]")
-            bbcode = BBCODE()
             if meta.get('discs', []) != []:
                 discs = meta['discs']
                 if discs[0]['type'] == "DVD":
@@ -431,9 +432,9 @@ class HDB():
             desc = bbcode.convert_code_to_quote(desc)
             desc = bbcode.convert_spoiler_to_hide(desc)
             desc = bbcode.convert_comparison_to_centered(desc, 1000)
-            desc = re.sub("(\[img=\d+)]", "[img]", desc, flags=re.IGNORECASE)
+            desc = re.sub(r"(\[img=\d+)]", "[img]", desc, flags=re.IGNORECASE)
             descfile.write(desc)
-            if self.rehost_images == True:
+            if self.rehost_images is True:
                 console.print("[green]Rehosting Images...")
                 hdbimg_bbcode = await self.hdbimg_upload(meta)
                 descfile.write(f"{hdbimg_bbcode}")

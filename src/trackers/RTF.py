@@ -4,23 +4,14 @@ import asyncio
 import requests
 import base64
 import re
+import json
 import datetime
 
 from src.trackers.COMMON import COMMON
 from src.console import console
 
 class RTF():
-    """
-    Edit for Tracker:
-        Edit BASE.torrent with announce and source
-        Check for duplicates
-        Set type/category IDs
-        Upload
-    """
 
-    ###############################################################
-    ########                    EDIT ME                    ########
-    ###############################################################
     def __init__(self, config):
         self.config = config
         self.tracker = 'RTF'
@@ -53,7 +44,7 @@ class RTF():
             # 'description' : meta['overview'] + "\n\n" + desc + "\n\n" + "Uploaded by L4G Upload Assistant",
             'description': "this is a description",
             # editing mediainfo so that instead of 1 080p its 1,080p as site mediainfo parser wont work other wise.
-            'mediaInfo': re.sub("(\d+)\s+(\d+)", r"\1,\2", mi_dump) if bd_dump == None else f"{bd_dump}",
+            'mediaInfo': re.sub(r"(\d+)\s+(\d+)", r"\1,\2", mi_dump) if bd_dump == None else f"{bd_dump}",
             "nfo": "",
             "url": "https://www.imdb.com/title/" + (meta['imdb_id'] if str(meta['imdb_id']).startswith("tt") else "tt" + meta['imdb_id']) + "/",
             # auto pulled from IMDB
@@ -82,20 +73,37 @@ class RTF():
             return
 
 
-        if meta['debug'] == False:
-            response = requests.post(url=self.upload_url, json=json_data, headers=headers)
+        if not meta['debug']:
+            success = 'Unknown'
             try:
-                console.print(response.json())
-            except:
-                console.print("It may have uploaded, go check")
-                return
-        else:
-            console.print(f"[cyan]Request Data:")
-            console.print(json_data)
+                response = requests.post(url=self.upload_url, json=json_data, headers=headers)
+                response.raise_for_status()                
+                response_json = response.json()
+                success = response_json.get('success', False)
+                data = response_json.get('data', {})
+            except Exception as e:
+                console.print(f"[red]Encountered Error: {e}[/red]\n[bold yellow]May have uploaded, please go check..")
+            if success == 'Unknown':
+                console.print("[bold yellow]Status of upload is unknown, please go check..")
+                success = False
+            elif success:
+                console.print("[bold green]Torrent uploaded successfully!")
+            else:
+                console.print("[bold red]Torrent upload failed.")
 
+            if data:
+                if 'name' in data and 'The name has already been taken.' in data['name']:
+                    console.print("[red]Name has already been taken.")
+                if 'info_hash' in data and 'The info hash has already been taken.' in data['info_hash']:
+                    console.print("[red]Info hash has already been taken.")                
+            else:
+                console.print("[cyan]Request Data:")
+                console.print(data)
+    
+            return success
 
     async def search_existing(self, meta):
-        dupes = []
+        dupes = {}
         console.print("[yellow]Searching for existing torrents on site...")
         headers = {
             'accept': 'application/json',
@@ -116,8 +124,9 @@ class RTF():
             response = requests.get(url=self.search_url, params=params, headers=headers)
             response = response.json()
             for each in response:
-                result = [each][0]['name']
-                dupes.append(result)
+                result = each['attributes']['name']
+                size = each['attributes']['size']
+                dupes[result] = size
         except:
             console.print('[bold red]Unable to search for existing torrents on site. Either the site is down or your API key is incorrect')
             await asyncio.sleep(5)
