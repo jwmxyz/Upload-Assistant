@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*- 
 from sys import meta_path
-from turtle import title
 from src.args import Args
 from src.console import console
 from src.exceptions import *
