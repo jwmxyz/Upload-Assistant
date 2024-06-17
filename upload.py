@@ -58,6 +58,8 @@ data_dir = os.path.join(base_dir, 'data')
 config_path = os.path.abspath(os.path.join(data_dir, 'config.py'))
 old_config_path = os.path.abspath(os.path.join(data_dir, 'backup', 'old_config.py'))
 minimum_version = Version('1.0.0')
+console.print(config_path)
+
 
 def get_backup_name(path, suffix='_bu'):
     base, ext = os.path.splitext(path)
@@ -67,8 +69,10 @@ def get_backup_name(path, suffix='_bu'):
         counter += 1
     return path
 
+
+
 if not os.path.exists(config_path):  
-    console.print("[bold red] It appears you have no config file, please ensure to configure and place `/data/config.py`")
+    console.print("[bold red] It appears you have no config file, please ensure to configure and place `{config_path}}`")
     exit()
 
 try:
