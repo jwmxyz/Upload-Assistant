@@ -17,6 +17,7 @@ config = {
         "ptpimg_api" : "ptpimg_API_KEY",
         "lensdump_api" : "lensdump_API_KEY",
         "ptscreens_api" : "ptscreens_API_KEY", #No Api Rate-Limit (slower than imgbb, but might be worth it!)
+        "oeimg_api" : "oeimg_API_KEY", 
 
         # Order of image hosts, and backup image hosts
         "img_host_1": "imgbb",
@@ -25,7 +26,9 @@ config = {
 	    "img_host_4": "pixhost",
         "img_host_5": "lensdump",
         "img_host_6": "ptscreens",
+        "img_host_7": "oeimg",
 
+        "screens" : "6",
         "img_size" : "500",  #Size in Description [img=500]
         "optimize_images" : True,  # Lossless PNG Compression (True/False)
 	    #"inline_imgs": 3, #Uncomment and use this if you want to insert a line break after X images in description
@@ -460,7 +463,8 @@ config = {
             "qbit_user" : "username",
             "qbit_pass" : "password",
             ### REPLACE $HOME with PATH: ie: /home/USER/ or on mac: USER/
-            "torrent_storage_dir" : "$HOME/.local/share/qBittorrent/BT_backup", #: "$HOME/Library/Application Support/qBittorrent/BT_backup" , if windows: r"C:\APPDATA\qBittorrent\BT_backup" or LOCALAPPDATA
+            "torrent_storage_dir" : "$HOME/.local/share/qBittorrent/BT_backup", #: "$HOME/Library/Application Support/qBittorrent/BT_backup" , if windows: r"C:\APPDATA\qBittorrent\BT_backup" or LOCALAPPDATA 
+            # if using DOCKER usually in  "/mnt/cache/appdata/qbittorrent/data/BT_backup/" HOWEVER input "/BT_backup" here
             # "qbit_tag" : "tag",
             # "qbit_cat" : "category",
             
