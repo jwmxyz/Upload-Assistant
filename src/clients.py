@@ -117,7 +117,7 @@ class Clients():
             torrenthash = torrenthash.upper().strip()
             torrent_path = torrent_path.replace(torrenthash.upper(), torrenthash)
         if meta['debug']:
-            console.log(torrent_path)
+            console.log(torrent_path, torrenthash)
         if os.path.exists(torrent_path):
             torrent = Torrent.read(torrent_path)
             # Reuse if disc and basename matches
@@ -134,6 +134,7 @@ class Clients():
                     wrong_file = True
             # Check if number of files matches number of videos
             elif len(torrent.files) == len(meta['filelist']):
+                console.log()
                 torrent_filepath = os.path.commonpath(torrent.files)
                 actual_filepath = os.path.commonpath(meta['filelist'])
                 local_path, remote_path = await self.remote_path_map(meta)
@@ -141,9 +142,12 @@ class Clients():
                     actual_filepath = torrent_path.replace(local_path, remote_path)
                     actual_filepath = torrent_path.replace(os.sep, '/')
                 if meta['debug']:
+                    console.log(f"torrent_hash: {torrenthash}")
                     console.log(f"torrent_filepath: {torrent_filepath}")
                     console.log(f"actual_filepath: {actual_filepath}")
                 if torrent_filepath in actual_filepath:
+                    valid = True
+                if torrenthash in actual_filepath:
                     valid = True
         else:
             console.print(f'[bold yellow]{torrent_path} was not found')
