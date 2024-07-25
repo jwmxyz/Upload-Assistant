@@ -19,5 +19,4 @@ rich
 Jinja2
 pyotp
 packaging
-cli-ui
 langcodes
